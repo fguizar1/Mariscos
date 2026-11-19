@@ -26,7 +26,7 @@ export default function CocinaPage() {
   const router = useRouter();
   const [usuario, setUsuario] = useState<Usuario | null>(null);
   const [comandas, setComandas] = useState<ComandaKDS[]>([]);
-  const [ahora, setAhora] = useState<number>(Date.now());
+  const [ahora, setAhora] = useState<number>(0);
 
   const cargarComandas = useCallback(async (area: string) => {
     const { data } = await supabase
@@ -57,6 +57,7 @@ export default function CocinaPage() {
     cargarComandas(area);
 
     // Reloj para actualizar los minutos transcurridos en vivo
+    const initTimer = setTimeout(() => setAhora(Date.now()), 0);
     const timer = setInterval(() => setAhora(Date.now()), 15000);
 
     // Escuchar nuevas comandas en tiempo real
@@ -73,6 +74,7 @@ export default function CocinaPage() {
 
     return () => {
       clearInterval(timer);
+      clearTimeout(initTimer);
       supabase.removeChannel(channel);
     };
   }, [router, cargarComandas]);
@@ -130,7 +132,7 @@ export default function CocinaPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {comandas.map((item) => {
-            const minutos = Math.floor((ahora - new Date(item.creado_en).getTime()) / 60000);
+            const minutos = ahora ? Math.max(0, Math.floor((ahora - new Date(item.creado_en).getTime()) / 60000)): 0;
             const urgente = minutos >= 15;
             const advertencia = minutos >= 8 && minutos < 15;
 
