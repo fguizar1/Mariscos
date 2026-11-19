@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { playKitchenBell } from '@/lib/sound';
@@ -12,6 +12,13 @@ export default function LoginPinPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  // Asegura que al llegar al login no quede ninguna sesión previa atorada
+  useEffect(() => {
+    sessionStorage.removeItem('usuario_activo');
+    setLoading(false);
+    setPin('');
+  }, []);
+
   const handleDigit = async (digit: string) => {
     if (pin.length >= 4 || loading) return;
     const nextPin = pin + digit;
@@ -20,31 +27,43 @@ export default function LoginPinPage() {
 
     if (nextPin.length === 4) {
       setLoading(true);
-      playKitchenBell();
 
-      const { data, error: dbError } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('pin_acceso', nextPin)
-        .eq('activo', true)
-        .single();
-
-      if (dbError || !data) {
-        if (dbError?.code === 'PGRST116') {
-          setError('PIN incorrecto');
-        } else {
-          setError(`Error BD: ${dbError?.message || 'Sin conexión'}`);
-        }
-        setPin('');
-        setLoading(false);
-        return;
+      // El sonido nunca debe bloquear el acceso si Safari restringe el audio
+      try {
+        playKitchenBell();
+      } catch {
+        // Ignorar si el navegador bloquea el audio
       }
 
-      sessionStorage.setItem('usuario_activo', JSON.stringify(data));
+      try {
+        const { data, error: dbError } = await supabase
+          .from('usuarios')
+          .select('*')
+          .eq('pin_acceso', nextPin)
+          .eq('activo', true)
+          .single();
 
-      if (data.rol === 'mesero') router.push('/mesero');
-      else if (data.rol === 'cocina' || data.rol === 'barra') router.push('/cocina');
-      else router.push('/admin');
+        if (dbError || !data) {
+          if (dbError?.code === 'PGRST116') {
+            setError('PIN incorrecto');
+          } else {
+            setError(`Error BD: ${dbError?.message || 'Sin conexión'}`);
+          }
+          setPin('');
+          setLoading(false);
+          return;
+        }
+
+        sessionStorage.setItem('usuario_activo', JSON.stringify(data));
+
+        if (data.rol === 'mesero') router.push('/mesero');
+        else if (data.rol === 'cocina' || data.rol === 'barra') router.push('/cocina');
+        else router.push('/admin');
+      } catch {
+        setError('Error de red. Intenta de nuevo.');
+        setPin('');
+        setLoading(false);
+      }
     }
   };
 
@@ -76,11 +95,12 @@ export default function LoginPinPage() {
           {loading && <p className="text-cyan-400 text-sm animate-pulse">Verificando...</p>}
         </div>
 
-        {/* Teclado numérico sin bordes toscos */}
+        {/* Teclado numérico */}
         <div className="grid grid-cols-3 gap-3.5 w-full">
           {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
             <button
               key={num}
+              type="button"
               onClick={() => handleDigit(num)}
               className="h-16 rounded-2xl bg-slate-900/90 hover:bg-slate-800 active:bg-cyan-500 active:text-slate-950 active:scale-95 text-2xl font-semibold ring-1 ring-white/5 transition-all"
             >
@@ -89,13 +109,17 @@ export default function LoginPinPage() {
           ))}
           <div />
           <button
+            type="button"
             onClick={() => handleDigit('0')}
             className="h-16 rounded-2xl bg-slate-900/90 hover:bg-slate-800 active:bg-cyan-500 active:text-slate-950 active:scale-95 text-2xl font-semibold ring-1 ring-white/5 transition-all"
           >
             0
           </button>
           <button
-            onClick={() => setPin((prev) => prev.slice(0, -1))}
+            type="button"
+            onClick={() => {
+              if (!loading) setPin((prev) => prev.slice(0, -1));
+            }}
             className="h-16 rounded-2xl bg-slate-900/40 hover:bg-slate-800 active:scale-95 flex items-center justify-center text-slate-400 transition-all"
             aria-label="Borrar"
           >
