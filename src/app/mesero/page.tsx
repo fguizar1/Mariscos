@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, Usuario, Mesa, Categoria, Producto } from '@/lib/supabase';
 import { playWaiterReadyAlert } from '@/lib/sound';
-import { Bell, CheckCircle2, ChevronLeft, LogOut, Plus, Send, Trash2 } from 'lucide-react';
+import { Bell, CheckCircle2, ChevronLeft, LogOut, Minus, Plus, ReceiptText, Send } from 'lucide-react';
 
 interface ItemCarrito {
   producto: Producto;
@@ -20,6 +20,14 @@ interface ItemListo {
   cuentas: { mesero_id: string; mesas: { nombre: string } };
 }
 
+interface ItemPrevio {
+  id: string;
+  cantidad: number;
+  notas: string | null;
+  estado: string;
+  productos: { nombre: string };
+}
+
 const NOTAS_RAPIDAS = ['Sin cebolla', 'Poco picante', 'Bien picante', 'Sin cilantro', 'Para llevar'];
 
 export default function MeseroPage() {
@@ -30,8 +38,10 @@ export default function MeseroPage() {
   const [productos, setProductos] = useState<Producto[]>([]);
   const [itemsListos, setItemsListos] = useState<ItemListo[]>([]);
 
-  // Estado para tomar orden en una mesa
   const [mesaActiva, setMesaActiva] = useState<Mesa | null>(null);
+  const [itemsPrevios, setItemsPrevios] = useState<ItemPrevio[]>([]);
+  const [totalPrevio, setTotalPrevio] = useState<number>(0);
+
   const [catActiva, setCatActiva] = useState<string>('');
   const [carrito, setCarrito] = useState<ItemCarrito[]>([]);
   const [notaTemporal, setNotaTemporal] = useState('');
@@ -74,6 +84,9 @@ export default function MeseroPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mesas' }, () => {
         cargarDatos(parsed.id);
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'productos' }, () => {
+        cargarDatos(parsed.id);
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'comandas_items' }, (payload) => {
         if (payload.new.estado === 'listo') {
           playWaiterReadyAlert();
@@ -86,6 +99,27 @@ export default function MeseroPage() {
       supabase.removeChannel(channel);
     };
   }, [router, cargarDatos]);
+
+  const abrirMesa = async (mesa: Mesa) => {
+    setMesaActiva(mesa);
+    setCarrito([]);
+    setItemsPrevios([]);
+    setTotalPrevio(0);
+
+    if (mesa.estado === 'ocupada') {
+      const { data } = await supabase
+        .from('cuentas')
+        .select('total, comandas_items(id, cantidad, notas, estado, productos(nombre))')
+        .eq('mesa_id', mesa.id)
+        .eq('estado', 'abierta')
+        .maybeSingle();
+
+      if (data) {
+        setTotalPrevio(Number(data.total));
+        setItemsPrevios((data.comandas_items as unknown as ItemPrevio[]) || []);
+      }
+    }
+  };
 
   const agregarAlCarrito = (producto: Producto, notas = '') => {
     setCarrito((prev) => {
@@ -101,12 +135,21 @@ export default function MeseroPage() {
     setNotaTemporal('');
   };
 
+  const cambiarCantidad = (index: number, delta: number) => {
+    setCarrito((prev) => {
+      const copia = [...prev];
+      const nuevaCant = copia[index].cantidad + delta;
+      if (nuevaCant <= 0) return copia.filter((_, i) => i !== index);
+      copia[index].cantidad = nuevaCant;
+      return copia;
+    });
+  };
+
   const enviarComanda = async () => {
     if (!mesaActiva || !usuario || carrito.length === 0 || enviando) return;
     setEnviando(true);
 
     try {
-      // 1. Buscar si la mesa ya tiene una cuenta abierta
       let { data: cuenta } = await supabase
         .from('cuentas')
         .select('*')
@@ -116,7 +159,6 @@ export default function MeseroPage() {
 
       const subtotalNuevo = carrito.reduce((acc, i) => acc + i.producto.precio * i.cantidad, 0);
 
-      // 2. Si no existe cuenta abierta, crearla y ocupar mesa
       if (!cuenta) {
         const { data: nuevaCuenta, error } = await supabase
           .from('cuentas')
@@ -130,7 +172,6 @@ export default function MeseroPage() {
 
         if (error) throw error;
         cuenta = nuevaCuenta;
-
         await supabase.from('mesas').update({ estado: 'ocupada' }).eq('id', mesaActiva.id);
       } else {
         await supabase
@@ -139,7 +180,6 @@ export default function MeseroPage() {
           .eq('id', cuenta.id);
       }
 
-      // 3. Insertar los ítems (esto dispara el timbre en Cocina/Barra)
       const itemsInsert = carrito.map((item) => ({
         cuenta_id: cuenta.id,
         producto_id: item.producto.id,
@@ -170,48 +210,48 @@ export default function MeseroPage() {
   if (!usuario) return null;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white pb-24">
-      {/* Header */}
-      <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-20">
+    <div className="min-h-dvh bg-slate-950 text-white pb-24 select-none">
+      {/* Header limpio */}
+      <header className="bg-slate-900/80 backdrop-blur-md px-4 py-3.5 flex items-center justify-between sticky top-0 z-20">
         <div>
-          <p className="text-xs text-cyan-400 font-medium">MESERO</p>
-          <h1 className="font-bold text-lg">{usuario.nombre}</h1>
+          <p className="text-[11px] text-cyan-400 font-bold tracking-wider uppercase">Mesero</p>
+          <h1 className="font-bold text-base leading-tight">{usuario.nombre}</h1>
         </div>
         <button
           onClick={() => {
             sessionStorage.removeItem('usuario_activo');
             router.push('/');
           }}
-          className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-xl"
+          className="p-2.5 text-slate-400 hover:text-white bg-slate-800/80 rounded-xl active:scale-95 transition"
         >
           <LogOut className="w-5 h-5" />
         </button>
       </header>
 
-      {/* Banner de Pedidos Listos para recoger */}
+      {/* Banner de Pedidos Listos */}
       {itemsListos.length > 0 && (
-        <div className="bg-rose-600/20 border-b border-rose-500/40 p-3 space-y-2">
-          <div className="flex items-center gap-2 text-rose-300 font-bold text-sm">
+        <div className="bg-rose-500/15 px-4 py-3 space-y-2">
+          <div className="flex items-center gap-2 text-rose-300 font-bold text-xs uppercase tracking-wide">
             <Bell className="w-4 h-4 animate-bounce" />
-            <span>¡PEDIDOS LISTOS EN BARRA / COCINA!</span>
+            <span>Pedidos listos para recoger</span>
           </div>
           {itemsListos.map((item) => (
             <div
               key={item.id}
-              className="bg-slate-900 border border-rose-500/50 rounded-xl p-3 flex items-center justify-between"
+              className="bg-slate-900 rounded-2xl p-3 flex items-center justify-between shadow-md ring-1 ring-rose-500/30"
             >
               <div>
-                <span className="text-xs font-bold uppercase bg-rose-600 px-2 py-0.5 rounded mr-2">
+                <span className="text-[11px] font-bold uppercase bg-rose-500 text-white px-2 py-0.5 rounded-md mr-2">
                   {item.cuentas.mesas.nombre}
                 </span>
-                <span className="font-semibold">
+                <span className="font-semibold text-sm">
                   {item.cantidad}x {item.productos.nombre}
                 </span>
                 {item.notas && <p className="text-xs text-amber-300 mt-1">Nota: {item.notas}</p>}
               </div>
               <button
                 onClick={() => marcarEntregado(item.id)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1"
+                className="bg-emerald-500 active:scale-95 text-slate-950 px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1 transition"
               >
                 <CheckCircle2 className="w-4 h-4" /> Entregado
               </button>
@@ -222,8 +262,8 @@ export default function MeseroPage() {
 
       {/* VISTA 1: MAPA DE MESAS */}
       {!mesaActiva ? (
-        <div className="p-4">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+        <div className="p-4 max-w-xl mx-auto">
+          <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
             Selecciona una mesa
           </h2>
           <div className="grid grid-cols-2 gap-3">
@@ -232,23 +272,22 @@ export default function MeseroPage() {
               return (
                 <button
                   key={mesa.id}
-                  onClick={() => {
-                    setMesaActiva(mesa);
-                    setCarrito([]);
-                  }}
-                  className={`h-28 rounded-2xl p-4 flex flex-col justify-between text-left border transition active:scale-95 ${
+                  onClick={() => abrirMesa(mesa)}
+                  className={`h-28 rounded-2xl p-4 flex flex-col justify-between text-left transition active:scale-95 shadow-sm ${
                     ocupada
-                      ? 'bg-amber-500/15 border-amber-500/50 text-amber-100'
-                      : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-100'
+                      ? 'bg-gradient-to-br from-amber-500/20 to-slate-900 ring-1 ring-amber-500/30'
+                      : 'bg-slate-900 ring-1 ring-white/5 hover:bg-slate-800/80'
                   }`}
                 >
                   <span className="text-lg font-bold">{mesa.nombre}</span>
                   <span
-                    className={`text-xs font-semibold uppercase px-2 py-1 rounded-lg w-fit ${
-                      ocupada ? 'bg-amber-500/30 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'
+                    className={`text-xs font-bold px-2.5 py-1 rounded-lg w-fit ${
+                      ocupada
+                        ? 'bg-amber-500/20 text-amber-300'
+                        : 'bg-emerald-500/15 text-emerald-400'
                     }`}
                   >
-                    {ocupada ? 'Ocupada' : 'Libre'}
+                    {ocupada ? 'Ocupada' : 'Disponible'}
                   </span>
                 </button>
               );
@@ -257,27 +296,49 @@ export default function MeseroPage() {
         </div>
       ) : (
         /* VISTA 2: TOMAR ORDEN DE MESA */
-        <div className="p-4 space-y-4">
+        <div className="p-4 max-w-xl mx-auto space-y-4">
           <div className="flex items-center justify-between">
             <button
               onClick={() => setMesaActiva(null)}
-              className="flex items-center gap-1 text-slate-300 bg-slate-900 px-3 py-2 rounded-xl border border-slate-800"
+              className="flex items-center gap-1 text-slate-300 bg-slate-900 px-3.5 py-2 rounded-xl text-sm font-semibold active:scale-95 transition"
             >
-              <ChevronLeft className="w-5 h-5" /> Mesas
+              <ChevronLeft className="w-4 h-4" /> Mesas
             </button>
-            <span className="font-bold text-lg text-cyan-400">{mesaActiva.nombre}</span>
+            <span className="font-extrabold text-lg text-cyan-400">{mesaActiva.nombre}</span>
           </div>
 
+          {/* Resumen si la mesa ya tenía consumo previo */}
+          {itemsPrevios.length > 0 && (
+            <details className="bg-slate-900/70 rounded-2xl p-3.5 ring-1 ring-amber-500/20">
+              <summary className="flex items-center justify-between text-xs font-bold text-amber-300 cursor-pointer list-none">
+                <span className="flex items-center gap-1.5">
+                  <ReceiptText className="w-4 h-4" /> Ya pedido en esta mesa ({itemsPrevios.length})
+                </span>
+                <span>Acumulado: ${totalPrevio.toFixed(2)}</span>
+              </summary>
+              <div className="mt-2.5 pt-2.5 border-t border-white/5 space-y-1 text-xs text-slate-300">
+                {itemsPrevios.map((prev) => (
+                  <div key={prev.id} className="flex justify-between">
+                    <span>
+                      <strong>{prev.cantidad}x</strong> {prev.productos.nombre}
+                    </span>
+                    <span className="text-slate-400 capitalize">{prev.estado}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
           {/* Categorías */}
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
             {categorias.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setCatActiva(cat.id)}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition ${
+                className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap transition ${
                   catActiva === cat.id
-                    ? 'bg-cyan-500 text-slate-950'
-                    : 'bg-slate-900 text-slate-300 border border-slate-800'
+                    ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                    : 'bg-slate-900 text-slate-300'
                 }`}
               >
                 {cat.nombre}
@@ -286,33 +347,35 @@ export default function MeseroPage() {
           </div>
 
           {/* Lista de Platillos */}
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {productos
               .filter((p) => p.categoria_id === catActiva)
               .map((prod) => (
                 <div
                   key={prod.id}
-                  className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex items-center justify-between"
+                  className="bg-slate-900 rounded-2xl p-3.5 flex items-center justify-between ring-1 ring-white/5"
                 >
-                  <div>
-                    <p className="font-semibold">{prod.nombre}</p>
-                    <p className="text-sm text-cyan-400 font-bold">${Number(prod.precio).toFixed(2)}</p>
+                  <div className="pr-2">
+                    <p className="font-semibold text-sm leading-snug">{prod.nombre}</p>
+                    <p className="text-sm text-cyan-400 font-extrabold mt-0.5">
+                      ${Number(prod.precio).toFixed(2)}
+                    </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 shrink-0">
                     <button
                       onClick={() => {
                         setProductoParaNota(prod);
                         setNotaTemporal('');
                       }}
-                      className="px-3 py-2 rounded-xl bg-slate-800 text-xs text-slate-300 font-medium"
+                      className="px-3 py-2.5 rounded-xl bg-slate-800 text-xs text-slate-300 font-semibold active:scale-95 transition"
                     >
                       + Nota
                     </button>
                     <button
                       onClick={() => agregarAlCarrito(prod)}
-                      className="p-3 rounded-xl bg-cyan-500 text-slate-950 font-bold active:scale-95"
+                      className="p-2.5 rounded-xl bg-cyan-500 text-slate-950 font-bold active:scale-90 transition shadow-sm"
                     >
-                      <Plus className="w-5 h-5" />
+                      <Plus className="w-5 h-5 stroke-[2.5]" />
                     </button>
                   </div>
                 </div>
@@ -321,15 +384,15 @@ export default function MeseroPage() {
 
           {/* Modal rápido de notas */}
           {productoParaNota && (
-            <div className="fixed inset-0 bg-black/80 z-30 flex items-end p-4">
-              <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 w-full space-y-3">
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-xs z-30 flex items-end sm:items-center justify-center p-4">
+              <div className="bg-slate-900 rounded-3xl p-5 w-full max-w-md space-y-4 ring-1 ring-white/10">
                 <h3 className="font-bold text-lg">{productoParaNota.nombre}</h3>
                 <div className="flex flex-wrap gap-2">
                   {NOTAS_RAPIDAS.map((n) => (
                     <button
                       key={n}
                       onClick={() => setNotaTemporal((prev) => (prev ? `${prev}, ${n}` : n))}
-                      className="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-700"
+                      className="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-xl font-medium"
                     >
                       {n}
                     </button>
@@ -340,18 +403,18 @@ export default function MeseroPage() {
                   value={notaTemporal}
                   onChange={(e) => setNotaTemporal(e.target.value)}
                   placeholder="Ej. Sin cebolla, tostadas aparte..."
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm"
+                  className="w-full bg-slate-950 rounded-xl px-3.5 py-3 text-sm outline-none ring-1 ring-white/10 focus:ring-cyan-500"
                 />
                 <div className="flex gap-2">
                   <button
                     onClick={() => setProductoParaNota(null)}
-                    className="flex-1 py-3 rounded-xl bg-slate-800 font-semibold"
+                    className="flex-1 py-3 rounded-xl bg-slate-800 font-semibold text-sm"
                   >
                     Cancelar
                   </button>
                   <button
                     onClick={() => agregarAlCarrito(productoParaNota, notaTemporal)}
-                    className="flex-1 py-3 rounded-xl bg-cyan-500 text-slate-950 font-bold"
+                    className="flex-1 py-3 rounded-xl bg-cyan-500 text-slate-950 font-extrabold text-sm"
                   >
                     Agregar
                   </button>
@@ -360,31 +423,53 @@ export default function MeseroPage() {
             </div>
           )}
 
-          {/* Resumen de orden actual antes de enviar */}
+          {/* Carrito listo para enviar */}
           {carrito.length > 0 && (
-            <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl p-4 space-y-3 mt-4">
-              <h3 className="font-bold text-sm text-cyan-400 uppercase">Por enviar a preparación</h3>
-              {carrito.map((item, index) => (
-                <div key={index} className="flex items-center justify-between text-sm border-b border-slate-800 pb-2">
-                  <div>
-                    <span className="font-bold">{item.cantidad}x</span> {item.producto.nombre}
-                    {item.notas && <p className="text-xs text-amber-300">({item.notas})</p>}
+            <div className="bg-slate-900 rounded-3xl p-4 space-y-3 ring-1 ring-cyan-500/30 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-xs text-cyan-400 uppercase tracking-wider">
+                  Nueva comanda
+                </h3>
+                <span className="text-sm font-extrabold text-white">
+                  ${carrito.reduce((acc, i) => acc + i.producto.precio * i.cantidad, 0).toFixed(2)}
+                </span>
+              </div>
+
+              <div className="space-y-2.5">
+                {carrito.map((item, index) => (
+                  <div key={index} className="flex items-center justify-between text-sm bg-slate-950/60 p-2.5 rounded-xl">
+                    <div className="pr-2">
+                      <p className="font-medium leading-tight">{item.producto.nombre}</p>
+                      {item.notas && <p className="text-xs text-amber-300 mt-0.5">{item.notas}</p>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => cambiarCantidad(index, -1)}
+                        className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center active:scale-90"
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <span className="font-bold w-5 text-center">{item.cantidad}</span>
+                      <button
+                        onClick={() => cambiarCantidad(index, 1)}
+                        className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center active:scale-90"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setCarrito((prev) => prev.filter((_, i) => i !== index))}
-                    className="text-rose-400 p-1"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+                ))}
+              </div>
+
               <button
                 onClick={enviarComanda}
                 disabled={enviando}
-                className="w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-base flex items-center justify-center gap-2 shadow-lg"
+                className="w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-98 text-slate-950 font-black text-base flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition"
               >
                 <Send className="w-5 h-5" />
-                {enviando ? 'Enviando...' : `ENVIAR COMANDA (${carrito.reduce((a, b) => a + b.cantidad, 0)})`}
+                {enviando
+                  ? 'Enviando...'
+                  : `ENVIAR COMANDA (${carrito.reduce((a, b) => a + b.cantidad, 0)})`}
               </button>
             </div>
           )}

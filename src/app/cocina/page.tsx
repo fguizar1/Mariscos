@@ -139,12 +139,12 @@ export default function CocinaPage() {
             return (
               <div
                 key={item.id}
-                className={`rounded-2xl border-2 p-5 flex flex-col justify-between transition ${
+                className={`rounded-2xl p-5 flex flex-col justify-between transition shadow-lg border-l-4 ${
                   urgente
-                    ? "bg-rose-950/30 border-rose-500"
+                    ? 'bg-rose-950/30 border-l-rose-500 ring-1 ring-rose-500/20'
                     : advertencia
-                      ? "bg-amber-950/20 border-amber-500"
-                      : "bg-slate-900 border-slate-700"
+                    ? 'bg-amber-950/20 border-l-amber-400 ring-1 ring-amber-400/20'
+                    : 'bg-slate-900 border-l-cyan-400 ring-1 ring-white/5'
                 }`}
               >
                 <div>
