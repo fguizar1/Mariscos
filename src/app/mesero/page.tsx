@@ -4,7 +4,22 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, Usuario, Mesa, Categoria, Producto } from '@/lib/supabase';
 import { playWaiterReadyAlert } from '@/lib/sound';
-import { Bell, CheckCircle2, ChevronLeft, LogOut, Minus, Plus, ReceiptText, Send } from 'lucide-react';
+import {
+  registrarServiceWorker,
+  pedirPermisoNotificaciones,
+  enviarNotificacionPedidoListo,
+} from '@/lib/notifications';
+import {
+  Bell,
+  BellRing,
+  CheckCircle2,
+  ChevronLeft,
+  LogOut,
+  Minus,
+  Plus,
+  ReceiptText,
+  Send,
+} from 'lucide-react';
 
 interface ItemCarrito {
   producto: Producto;
@@ -48,6 +63,8 @@ export default function MeseroPage() {
   const [productoParaNota, setProductoParaNota] = useState<Producto | null>(null);
   const [enviando, setEnviando] = useState(false);
 
+  const [permisoNotif, setPermisoNotif] = useState<NotificationPermission>('default');
+
   const cargarDatos = useCallback(async (userId: string) => {
     const [resMesas, resCats, resProds, resListos] = await Promise.all([
       supabase.from('mesas').select('*').order('orden_visual'),
@@ -79,6 +96,11 @@ export default function MeseroPage() {
     setUsuario(parsed);
     cargarDatos(parsed.id);
 
+    registrarServiceWorker();
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setPermisoNotif(Notification.permission);
+    }
+
     const channel = supabase
       .channel('mesero-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mesas' }, () => {
@@ -87,9 +109,29 @@ export default function MeseroPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'productos' }, () => {
         cargarDatos(parsed.id);
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'comandas_items' }, (payload) => {
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'comandas_items' }, async (payload) => {
         if (payload.new.estado === 'listo') {
-          playWaiterReadyAlert();
+          try {
+            playWaiterReadyAlert();
+          } catch {
+            // Ignorar bloqueo de audio
+          }
+
+          const { data: detalle } = await supabase
+            .from('comandas_items')
+            .select('cantidad, productos(nombre), cuentas!inner(mesero_id, mesas(nombre))')
+            .eq('id', payload.new.id)
+            .single();
+
+          const itemDetalle = detalle as unknown as ItemListo | null;
+          if (itemDetalle && itemDetalle.cuentas.mesero_id === parsed.id) {
+            enviarNotificacionPedidoListo(
+              itemDetalle.cuentas.mesas.nombre,
+              itemDetalle.cantidad,
+              itemDetalle.productos.nombre
+            );
+          }
+
           cargarDatos(parsed.id);
         }
       })
@@ -217,15 +259,28 @@ export default function MeseroPage() {
           <p className="text-[11px] text-cyan-400 font-bold tracking-wider uppercase">Mesero</p>
           <h1 className="font-bold text-base leading-tight">{usuario.nombre}</h1>
         </div>
-        <button
-          onClick={() => {
-            sessionStorage.removeItem('usuario_activo');
-            router.push('/');
-          }}
-          className="p-2.5 text-slate-400 hover:text-white bg-slate-800/80 rounded-xl active:scale-95 transition"
-        >
-          <LogOut className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          {permisoNotif !== 'granted' && (
+            <button
+              onClick={async () => {
+                const res = await pedirPermisoNotificaciones();
+                setPermisoNotif(res);
+              }}
+              className="flex items-center gap-1.5 bg-cyan-500/20 text-cyan-300 px-3 py-2 rounded-xl text-xs font-bold active:scale-95 transition"
+            >
+              <BellRing className="w-4 h-4" /> Activar avisos
+            </button>
+          )}
+          <button
+            onClick={() => {
+              sessionStorage.removeItem('usuario_activo');
+              window.location.href = '/';
+            }}
+            className="p-2.5 text-slate-400 hover:text-white bg-slate-800/80 rounded-xl active:scale-95 transition"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
+        </div>
       </header>
 
       {/* Banner de Pedidos Listos */}
